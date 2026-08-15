@@ -1,0 +1,122 @@
+# OmniRoute — single-file manifest (matches /root/k8s-manifests/<app>/<app>.yaml convention)
+# apply: kubectl apply -f omniroute.yaml
+# Free multi-provider AI gateway (github.com/diegosouzapw/OmniRoute), similar role
+# to 9router but a separate app — added alongside it, NOT replacing it.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omniroute
+---
+# Secrets are NOT committed. Copy secret.example.yaml -> secret.yaml, fill it
+# in, and apply it before this manifest.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: omniroute-data
+  namespace: omniroute
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omniroute
+  namespace: omniroute
+  labels: { app: omniroute }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: omniroute }
+  template:
+    metadata:
+      labels: { app: omniroute }
+    spec:
+      # Same CoreDNS/external-TLS fix applied to hermes/affine/uptime/anythingllm —
+      # OmniRoute needs outbound HTTPS to reach 339 AI providers.
+      dnsPolicy: "None"
+      dnsConfig:
+        nameservers:
+          - 10.43.0.10
+          - 8.8.8.8
+          - 1.1.1.1
+        searches:
+          - omniroute.svc.cluster.local
+          - svc.cluster.local
+          - cluster.local
+        options:
+          - name: ndots
+            value: "5"
+      containers:
+        - name: omniroute
+          image: diegosouzapw/omniroute:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 20128 }
+          envFrom:
+            - secretRef: { name: omniroute-secrets }
+          env:
+            - { name: PORT, value: "20128" }
+            - { name: NODE_ENV, value: "production" }
+          resources:
+            requests: { cpu: "200m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1.5Gi" }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: omniroute-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omniroute-service
+  namespace: omniroute
+  labels: { app: omniroute }
+spec:
+  type: ClusterIP
+  selector: { app: omniroute }
+  ports:
+    - { name: http, port: 20128, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omniroute
+  namespace: omniroute
+  labels: { app: omniroute }
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: omniroute.mdmahfujarrahman.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: omniroute-service
+                port:
+                  number: 20128

@@ -1,0 +1,148 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: 9router
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: 9router
+  namespace: 9router
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: 9router-data
+  namespace: 9router
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: 9router-deployment
+  namespace: 9router
+  labels:
+    app: 9router
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: 9router
+  template:
+    metadata:
+      labels:
+        app: 9router
+    spec:
+      serviceAccountName: 9router
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: 9router
+          image: decolua/9router:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 20128
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "20128"
+            - name: DATA_DIR
+              value: "/data"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: 9router-secrets
+                  key: jwt-secret
+            - name: INITIAL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: 9router-secrets
+                  key: initial-password
+            - name: ENABLE_REQUEST_LOGS
+              value: "false"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+              ephemeral-storage: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+              ephemeral-storage: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: 9router-data
+              mountPath: /data
+      volumes:
+        - name: 9router-data
+          persistentVolumeClaim:
+            claimName: 9router-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nine-router-service
+  namespace: 9router
+  labels:
+    app: 9router
+spec:
+  type: ClusterIP
+  selector:
+    app: 9router
+  ports:
+    - name: http
+      port: 20128
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nine-router
+  namespace: 9router
+  labels:
+    app: 9router
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: router.mdmahfujarrahman.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nine-router-service
+                port:
+                  number: 20128

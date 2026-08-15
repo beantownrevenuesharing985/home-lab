@@ -1,0 +1,133 @@
+# AnythingLLM — single-file manifest (matches /root/k8s-manifests/<app>/<app>.yaml convention)
+# apply: kubectl apply -f anythingllm.yaml
+# Backend LLM: uses existing in-cluster ollama-service (llama3.2:3b) instead of a new model.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anythingllm
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: anythingllm-data
+  namespace: anythingllm
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Secrets are NOT committed. Copy secret.example.yaml -> secret.yaml, fill it
+# in, and apply it before this manifest.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anythingllm
+  namespace: anythingllm
+  labels: { app: anythingllm }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # sqlite storage — never run 2 pods on one RWO volume
+  selector:
+    matchLabels: { app: anythingllm }
+  template:
+    metadata:
+      labels: { app: anythingllm }
+    spec:
+      # CoreDNS resolves some external hosts to a Cloudflare anycast IP whose
+      # edge node rejects TLS handshakes from this cluster (ERR_SSL_VERSION_
+      # OR_CIPHER_MISMATCH seen scraping google.com etc). Fix needs care:
+      # - dnsPolicy None alone drops CoreDNS entirely -> breaks internal
+      #   *.svc.cluster.local lookups (ollama-service unreachable).
+      # - dnsPolicy ClusterFirst + extra nameservers inherits the NODE's own
+      #   search domain (mdmahfujarrahman.com, wildcard-routed via Cloudflare)
+      #   which with ndots:5 gets appended to EVERY lookup incl. internal
+      #   svc names and external hosts, all matching the wildcard and
+      #   resolving to the same wrong IP.
+      # Correct fix: dnsPolicy None + explicit full config — CoreDNS first
+      # for cluster-internal names, public DNS fallback for external, and
+      # ONLY the real cluster search suffixes (no node domain wildcard).
+      dnsPolicy: "None"
+      dnsConfig:
+        nameservers:
+          - 10.43.0.10   # CoreDNS (kube-dns service ClusterIP) — internal svc names
+          - 8.8.8.8
+          - 1.1.1.1
+        searches:
+          - anythingllm.svc.cluster.local
+          - svc.cluster.local
+          - cluster.local
+        options:
+          - name: ndots
+            value: "5"
+      containers:
+        - name: anythingllm
+          image: mintplexlabs/anythingllm:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 3001 }
+          envFrom:
+            - secretRef: { name: anythingllm-secrets }
+          env:
+            - { name: STORAGE_DIR, value: "/app/server/storage" }
+            - { name: LLM_PROVIDER, value: "ollama" }
+            - { name: OLLAMA_BASE_PATH, value: "http://ollama-service.ollama.svc.cluster.local.:11434" }
+            - { name: OLLAMA_MODEL_PREF, value: "llama3.2:3b" }
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - { name: data, mountPath: /app/server/storage }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: anythingllm-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anythingllm
+  namespace: anythingllm
+  labels: { app: anythingllm }
+spec:
+  type: ClusterIP
+  ports:
+    - { name: http, port: 3001, targetPort: http }
+  selector: { app: anythingllm }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: anythingllm
+  namespace: anythingllm
+  labels: { app: anythingllm }
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: anythingllm.mdmahfujarrahman.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: anythingllm
+                port:
+                  number: 3001

@@ -1,0 +1,217 @@
+# Hermes Agent — single-file manifest (matches /root/k8s-manifests/<app>/<app>.yaml convention)
+# apply: kubectl apply -f hermes.yaml
+#
+# Single container runs both the gateway (main CMD: `gateway run`, handles
+# Telegram) and the dashboard (built-in s6-supervised service, toggled via
+# HERMES_DASHBOARD=true) — see docker/s6-rc.d/dashboard/run upstream.
+# Dashboard has its own mandatory auth gate for non-loopback binds, satisfied
+# here via HERMES_DASHBOARD_BASIC_AUTH_USERNAME/PASSWORD. Traefik basic-auth
+# in front of that is a second, redundant layer per user's explicit request.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hermes
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-config
+  namespace: hermes
+data:
+  HERMES_UID: "10000"
+  HERMES_GID: "10000"
+  HERMES_DASHBOARD: "true"
+  HERMES_DASHBOARD_HOST: "0.0.0.0"
+  HERMES_DASHBOARD_PORT: "9119"
+  HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "admin"
+  # Google/Gemini via 9router's OpenAI-compatible endpoint (gemini-cli OAuth
+  # connection already configured there) instead of a paid AI Studio key.
+  GEMINI_BASE_URL: "https://router.mdmahfujarrahman.com/v1"
+---
+# Secrets are NOT committed. Copy secret.example.yaml -> secret.yaml, fill it
+# in, and apply it before this manifest. See secret.example.yaml for details.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-data
+  namespace: hermes
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Read-only cluster access so Hermes's terminal tool can run `kubectl get/
+# describe/logs` to check cluster status when asked. Bound to the built-in
+# "view" ClusterRole, which deliberately excludes Secrets — Hermes can look
+# but not touch (no create/update/delete/exec on anything).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hermes
+  namespace: hermes
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hermes-view
+subjects:
+  - kind: ServiceAccount
+    name: hermes
+    namespace: hermes
+roleRef:
+  kind: ClusterRole
+  name: view
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hermes-metrics-view
+rules:
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  # Built-in "view" only covers namespaced resources — nodes/PVs are
+  # cluster-scoped and need a separate grant to be visible to `kubectl get
+  # nodes` etc.
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hermes-metrics-view
+subjects:
+  - kind: ServiceAccount
+    name: hermes
+    namespace: hermes
+roleRef:
+  kind: ClusterRole
+  name: hermes-metrics-view
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hermes
+  namespace: hermes
+  labels: { app: hermes }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # SQLite is single-writer — never run 2 pods on one RWO volume
+  selector:
+    matchLabels: { app: hermes }
+  template:
+    metadata:
+      labels: { app: hermes }
+    spec:
+      # Must start as root (uid 0) — the image's entrypoint rejects any
+      # other explicit UID and s6 drops privilege to the baked-in hermes
+      # user (uid 10000) internally. Do not set runAsUser/runAsNonRoot.
+      serviceAccountName: hermes
+      # CoreDNS resolves some external hosts (e.g. mcp.atlassian.com) to a
+      # Cloudflare anycast IP whose edge node rejects TLS handshakes from
+      # this cluster — same fix already used by affine/uptime in this repo.
+      dnsPolicy: "None"
+      dnsConfig:
+        nameservers:
+          - 8.8.8.8
+          - 1.1.1.1
+      containers:
+        - name: hermes
+          image: docker.io/mdmahfujarrahamn/hermes-agent:latest
+          imagePullPolicy: Always
+          args: ["gateway", "run"]
+          ports:
+            - { name: dashboard, containerPort: 9119 }
+          envFrom:
+            - configMapRef: { name: hermes-config }
+            - secretRef: { name: hermes-secrets }
+          env:
+            - name: PATH
+              # Kubernetes' $(VAR) syntax only expands vars defined in this
+              # same env list, NOT ones baked into the image via Dockerfile
+              # ENV — using $(PATH) here silently produced a broken literal
+              # string and wiped the path to the `hermes` binary itself.
+              # Spelling out the image's real baked PATH (see Dockerfile)
+              # plus /shared-bin at the end instead.
+              value: "/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/shared-bin"
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "2Gi" }
+          readinessProbe:
+            tcpSocket: { port: dashboard }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket: { port: dashboard }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - { name: data, mountPath: /opt/data }
+            - { name: kubectl-bin, mountPath: /shared-bin/kubectl, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: hermes-data }
+        - name: kubectl-bin
+          # k3s's binary dispatches based on argv[0] — mounted as "kubectl"
+          # it behaves as a standalone kubectl, no separate download needed.
+          # Single-node cluster, so hostPath is safe/portable here.
+          hostPath: { path: /usr/local/bin/k3s, type: File }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-dashboard
+  namespace: hermes
+  labels: { app: hermes }
+spec:
+  type: ClusterIP
+  ports:
+    - { name: dashboard, port: 9119, targetPort: dashboard }
+  selector: { app: hermes }
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hermes-basicauth
+  namespace: hermes
+spec:
+  basicAuth:
+    secret: hermes-dashboard-basicauth
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hermes-dashboard
+  namespace: hermes
+  labels: { app: hermes }
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: hermes-hermes-basicauth@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: hermes.mdmahfujarrahman.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hermes-dashboard
+                port:
+                  number: 9119

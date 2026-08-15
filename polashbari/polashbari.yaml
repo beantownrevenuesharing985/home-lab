@@ -1,0 +1,140 @@
+# amderpolashbari — single-file manifest (matches /root/k8s-manifests/<app>/<app>.yaml convention)
+# apply: kubectl apply -f polashbari.yaml
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: polashbari
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: polashbari-config
+  namespace: polashbari
+data:
+  NODE_ENV: "production"
+  HOST: "0.0.0.0"
+  PORT: "4321"
+  DATABASE_URL: "/app/data/amderpolashbari.db"
+---
+# Secrets are NOT committed. Copy secret.example.yaml -> secret.yaml, fill it
+# in, and apply it before this manifest.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: polashbari-data
+  namespace: polashbari
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: polashbari-uploads
+  namespace: polashbari
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amderpolashbari
+  namespace: polashbari
+  labels: { app: amderpolashbari }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # SQLite is single-writer — never run 2 pods on one RWO volume
+  selector:
+    matchLabels: { app: amderpolashbari }
+  template:
+    metadata:
+      labels: { app: amderpolashbari }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: app
+          image: docker.io/mdmahfujarrahamn/amderpolashbari:testing
+          imagePullPolicy: Always
+          ports:
+            - { name: http, containerPort: 4321 }
+          envFrom:
+            - configMapRef: { name: polashbari-config }
+            - secretRef: { name: polashbari-secrets }
+          env:
+            - name: BETTER_AUTH_URL
+              value: "https://amaderpolashbari.mdmahfujarrahman.com"
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+            - { name: uploads, mountPath: /app/public/uploads }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: polashbari-data }
+        - name: uploads
+          persistentVolumeClaim: { claimName: polashbari-uploads }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amderpolashbari
+  namespace: polashbari
+  labels: { app: amderpolashbari }
+spec:
+  type: ClusterIP
+  ports:
+    - { name: http, port: 4321, targetPort: http }
+  selector: { app: amderpolashbari }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: amderpolashbari
+  namespace: polashbari
+  labels: { app: amderpolashbari }
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: amaderpolashbari.mdmahfujarrahman.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: amderpolashbari
+                port:
+                  number: 4321

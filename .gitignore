@@ -1,0 +1,23 @@
+# Real secrets never get committed — only *.example.yaml does.
+secret.yaml
+*/secret.yaml
+*.secret.yaml
+secrets/
+
+# Credentials / cluster access
+kubeconfig
+*.kubeconfig
+.kube/
+*.pem
+*.key
+*.crt
+*.p12
+.env
+.env.*
+!.env.example
+
+# Local noise
+*.log
+*.bak
+*.tmp
+.DS_Store
